@@ -2,7 +2,6 @@
 
 namespace TelegramMonitor;
 
-use danog\MadelineProto\API;
 use danog\MadelineProto\Logger;
 use Monolog\Logger as MonologLogger;
 use Monolog\Handler\StreamHandler;
@@ -23,52 +22,44 @@ use danog\MadelineProto\EventHandler;
 
 class TelegramMonitor extends EventHandler
 {
-    private array $keywords;
-    private array $targetChats;
-    private string $responseMessage;
+    private array $keywords = [];
+    private array $targetChats = [];
+    private string $responseMessage = '';
     private MonologLogger $logger;
-    private array $config;
+    private static array $config = [];
 
     /**
-     * MadelineProto 8.x 新的启动方法
+     * 自定义启动方法，用于传递配置
      */
-    public static function startAndLoop(string $session, array $config): void
+    public static function startWithConfig(string $session, array $config): void
     {
-        // 创建 MadelineProto 设置
-        $settings = [
-            'logger' => [
-                'logger' => Logger::ECHO_LOGGER,
-                'logger_level' => Logger::LEVEL_VERBOSE,
-            ],
-            'serialization' => [
-                'serialization_interval' => 30,
-            ],
-        ];
+        // 保存配置到静态变量，供 onStart() 使用
+        self::$config = $config;
         
-        // 如果配置中有额外的设置，合并它们
-        if (isset($config['madelineproto'])) {
-            $settings = array_merge_recursive($settings, $config['madelineproto']);
-        }
-        
-        // 在 MadelineProto 8.x 中，使用新的方式启动 EventHandler
-        $API = new API($session, $settings);
-        $eventHandler = new self($API, $config);
-        $eventHandler->start();
+        // 在 MadelineProto 8.x 中，直接调用父类的 startAndLoop 方法
+        // 该方法只接受 session 参数
+        self::startAndLoop($session);
     }
 
-    public function __construct(API $API, array $config)
+    /**
+     * MadelineProto 8.x 初始化方法，替代构造函数
+     */
+    public function onStart(): void
     {
-        $this->config = $config;
-        $this->keywords = explode(',', $config['keywords']);
-        $this->targetChats = explode(',', $config['target_chats']);
-        $this->responseMessage = $config['response_message'];
+        $config = self::$config;
         
-        $this->setupLogger();
+        $this->keywords = explode(',', $config['keywords'] ?? '');
+        $this->targetChats = explode(',', $config['target_chats'] ?? '');
+        $this->responseMessage = $config['response_message'] ?? '消息已记录';
         
-        parent::__construct($API);
+        $this->setupLogger($config);
+        
+        $this->logger->info('TelegramMonitor 已启动');
+        $this->logger->info('监控关键词: ' . implode(', ', $this->keywords));
+        $this->logger->info('目标聊天: ' . implode(', ', $this->targetChats));
     }
 
-    private function setupLogger(): void
+    private function setupLogger(array $config): void
     {
         $this->logger = new MonologLogger('TelegramMonitor');
         
@@ -76,9 +67,9 @@ class TelegramMonitor extends EventHandler
         $this->logger->pushHandler(new StreamHandler('php://stdout', MonologLogger::INFO));
         
         // 文件日志
-        if (!empty($this->config['log_file'])) {
+        if (!empty($config['log_file'])) {
             $this->logger->pushHandler(
-                new RotatingFileHandler($this->config['log_file'], 0, MonologLogger::DEBUG)
+                new RotatingFileHandler($config['log_file'], 0, MonologLogger::DEBUG)
             );
         }
     }
@@ -198,14 +189,14 @@ class TelegramMonitor extends EventHandler
     private function getChatId(array $message): int
     {
         if (isset($message['peer_id']['channel_id'])) {
-            return -100 . $message['peer_id']['channel_id'];
+            return (int) $message['peer_id']['channel_id'];
+        } elseif (isset($message['peer_id']['chat_id'])) {
+            return (int) $message['peer_id']['chat_id'];
+        } elseif (isset($message['peer_id']['user_id'])) {
+            return (int) $message['peer_id']['user_id'];
         }
         
-        if (isset($message['peer_id']['chat_id'])) {
-            return -$message['peer_id']['chat_id'];
-        }
-        
-        return $message['peer_id']['user_id'] ?? 0;
+        return 0;
     }
 
     /**
@@ -213,7 +204,7 @@ class TelegramMonitor extends EventHandler
      */
     private function getSenderId(array $message): int
     {
-        return $message['from_id']['user_id'] ?? 0;
+        return (int) ($message['from_id']['user_id'] ?? $message['from_id'] ?? 0);
     }
 
     /**
@@ -222,14 +213,18 @@ class TelegramMonitor extends EventHandler
     private function getSenderInfo(int $userId): array
     {
         try {
-            $user = $this->getPwrChat($userId);
+            $user = $this->getInfo($userId);
+            
             return [
-                'name' => $user['first_name'] . ' ' . ($user['last_name'] ?? ''),
-                'username' => $user['username'] ?? 'None'
+                'name' => ($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? ''),
+                'username' => $user['username'] ?? 'unknown'
             ];
         } catch (\Exception $e) {
-            $this->logger->warning("获取用户信息失败", ['user_id' => $userId, 'error' => $e->getMessage()]);
-            return ['name' => 'Unknown', 'username' => 'None'];
+            $this->logger->error("获取用户信息失败", ['user_id' => $userId, 'error' => $e->getMessage()]);
+            return [
+                'name' => 'Unknown User',
+                'username' => 'unknown'
+            ];
         }
     }
 
@@ -239,14 +234,16 @@ class TelegramMonitor extends EventHandler
     private function getChatInfo(int $chatId): array
     {
         try {
-            $chat = $this->getPwrChat($chatId);
+            $chat = $this->getInfo($chatId);
+            
             return [
-                'title' => $chat['title'] ?? 'Private Chat',
-                'type' => $chat['type'] ?? 'unknown'
+                'title' => $chat['title'] ?? 'Unknown Chat'
             ];
         } catch (\Exception $e) {
-            $this->logger->warning("获取聊天信息失败", ['chat_id' => $chatId, 'error' => $e->getMessage()]);
-            return ['title' => 'Unknown Chat', 'type' => 'unknown'];
+            $this->logger->error("获取聊天信息失败", ['chat_id' => $chatId, 'error' => $e->getMessage()]);
+            return [
+                'title' => 'Unknown Chat'
+            ];
         }
     }
 
@@ -257,9 +254,9 @@ class TelegramMonitor extends EventHandler
     {
         try {
             $this->messages->sendMessage([
-                'peer' => $this->getChatId($message),
-                'message' => $replyText,
-                'reply_to_msg_id' => $message['id']
+                'peer' => $message['peer_id'],
+                'reply_to_msg_id' => $message['id'],
+                'message' => $replyText
             ]);
         } catch (\Exception $e) {
             $this->logger->error("回复消息失败", ['error' => $e->getMessage()]);
@@ -267,7 +264,7 @@ class TelegramMonitor extends EventHandler
     }
 
     /**
-     * 手动发送消息到指定聊天
+     * 发送自定义消息
      */
     public function sendCustomMessage(string $chatId, string $message): void
     {
@@ -283,27 +280,18 @@ class TelegramMonitor extends EventHandler
                 'chat_id' => $chatId,
                 'error' => $e->getMessage()
             ]);
+            throw $e;
         }
     }
 
     /**
-     * 获取所有对话列表
+     * 获取对话列表
      */
     public function listDialogs(): array
     {
         try {
             $dialogs = $this->messages->getDialogs();
-            $result = [];
-            
-            foreach ($dialogs['chats'] as $chat) {
-                $result[] = [
-                    'id' => $chat['id'],
-                    'title' => $chat['title'] ?? $chat['first_name'] ?? 'Unknown',
-                    'type' => $chat['_'] ?? 'unknown'
-                ];
-            }
-            
-            return $result;
+            return $dialogs['dialogs'] ?? [];
         } catch (\Exception $e) {
             $this->logger->error("获取对话列表失败", ['error' => $e->getMessage()]);
             return [];

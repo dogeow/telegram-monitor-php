@@ -47,8 +47,8 @@ try {
     
     echo "🔄 启动监听程序...\n";
     
-    // 在 MadelineProto 8.x 中，直接使用 EventHandler 的 startAndLoop 方法
-    TelegramMonitor::startAndLoop($sessionFile, $config->get());
+    // 在 MadelineProto 8.x 中，使用自定义的 startWithConfig 方法
+    TelegramMonitor::startWithConfig($sessionFile, $config->get());
     
     echo "✅ 监听程序已启动！\n";
     echo "💡 程序正在运行，按 Ctrl+C 停止监听\n";
