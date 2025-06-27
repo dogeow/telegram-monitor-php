@@ -29,7 +29,34 @@ class TelegramMonitor extends EventHandler
     private MonologLogger $logger;
     private array $config;
 
-    public function __construct(array $config)
+    /**
+     * MadelineProto 8.x 新的启动方法
+     */
+    public static function startAndLoop(string $session, array $config): void
+    {
+        // 创建 MadelineProto 设置
+        $settings = [
+            'logger' => [
+                'logger' => Logger::ECHO_LOGGER,
+                'logger_level' => Logger::LEVEL_VERBOSE,
+            ],
+            'serialization' => [
+                'serialization_interval' => 30,
+            ],
+        ];
+        
+        // 如果配置中有额外的设置，合并它们
+        if (isset($config['madelineproto'])) {
+            $settings = array_merge_recursive($settings, $config['madelineproto']);
+        }
+        
+        // 在 MadelineProto 8.x 中，使用新的方式启动 EventHandler
+        $API = new API($session, $settings);
+        $eventHandler = new self($API, $config);
+        $eventHandler->start();
+    }
+
+    public function __construct(API $API, array $config)
     {
         $this->config = $config;
         $this->keywords = explode(',', $config['keywords']);
@@ -38,7 +65,7 @@ class TelegramMonitor extends EventHandler
         
         $this->setupLogger();
         
-        parent::__construct();
+        parent::__construct($API);
     }
 
     private function setupLogger(): void

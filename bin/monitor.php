@@ -45,21 +45,14 @@ try {
         exit(1);
     }
     
-    // 创建 MadelineProto 实例
-    $settings = $config->getMadelineProtoSettings();
-    $MadelineProto = new API($sessionFile, $settings);
-    
     echo "🔄 启动监听程序...\n";
     
-    // 设置事件处理器
-    $MadelineProto->setEventHandler(TelegramMonitor::class, $config->get());
+    // 在 MadelineProto 8.x 中，直接使用 EventHandler 的 startAndLoop 方法
+    TelegramMonitor::startAndLoop($sessionFile, $config->get());
     
     echo "✅ 监听程序已启动！\n";
     echo "💡 程序正在运行，按 Ctrl+C 停止监听\n";
     echo "📝 日志文件: " . $config->get('log_file') . "\n\n";
-    
-    // 开始监听
-    $MadelineProto->loop();
     
 } catch (\Exception $e) {
     echo "❌ 启动失败: " . $e->getMessage() . "\n";
